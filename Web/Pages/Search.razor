@@ -1,0 +1,82 @@
+@page "/search"
+@using ModelContextProtocol.Client
+@using System.Net.Http
+@using System.Text.Json
+@inject IHttpClientFactory HttpClientFactory
+
+<PageTitle>Semantic Search</PageTitle>
+
+<h3>Semantic Search</h3>
+
+<div class="mb-3">
+    <input class="form-control" placeholder="Enter your query…" @bind="query" @bind:event="oninput" />
+</div>
+<button class="btn btn-primary" @onclick="RunSearch" disabled="@isLoading">
+    @(isLoading ? "Searching…" : "Search")
+</button>
+
+@if (errorMessage is not null)
+{
+    <div class="alert alert-danger mt-3">@errorMessage</div>
+}
+
+@if (results.Count > 0)
+{
+    <ul class="list-group mt-3">
+        @foreach (var r in results)
+        {
+            <li class="list-group-item">
+                <strong>Score: @r.Score.ToString("F2")</strong>
+                <p class="mb-0">@r.ChunkText</p>
+            </li>
+        }
+    </ul>
+}
+
+@code {
+    private string query = string.Empty;
+    private bool isLoading;
+    private string? errorMessage;
+    private List<SearchResult> results = [];
+
+    private record SearchResult(string ChunkText, double Score);
+
+    private async Task RunSearch()
+    {
+        errorMessage = null;
+        results = [];
+        isLoading = true;
+
+        try
+        {
+            var httpClient = HttpClientFactory.CreateClient("McpServer");
+
+            await using var transport = new HttpClientTransport(
+                new HttpClientTransportOptions
+                {
+                    Endpoint = httpClient.BaseAddress!,
+                    TransportMode = HttpTransportMode.StreamableHttp
+                },
+                httpClient);
+
+            await using var mcpClient = await McpClient.CreateAsync(transport);
+
+            var toolResult = await mcpClient.CallToolAsync(
+                "semantic_search",
+                new Dictionary<string, object?> { ["query"] = query, ["topK"] = 5 });
+
+            var json = toolResult.StructuredContent?.GetRawText()
+                ?? "[]";
+            results = JsonSerializer.Deserialize<List<SearchResult>>(json,
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? [];
+        }
+        catch (Exception ex)
+        {
+            errorMessage = ex.Message;
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+}
