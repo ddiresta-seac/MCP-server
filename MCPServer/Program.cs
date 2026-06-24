@@ -12,7 +12,8 @@ builder.Services.AddCors(options =>
 builder.Services
     .AddMcpServer()
     .WithHttpTransport(o => o.Stateless = true)
-    .WithTools<SemanticSearchTool>();
+    .WithTools<SemanticSearchTool>()
+    .WithTools<DocumentIngestionTool>();
 
 var app = builder.Build();
 
