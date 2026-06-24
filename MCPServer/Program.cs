@@ -1,3 +1,4 @@
+using Core.VectorStore;
 using MCPServer.Tools;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -8,6 +9,8 @@ builder.Services.AddCors(options =>
               .WithMethods("GET", "POST", "DELETE")
               .WithHeaders("Content-Type", "MCP-Protocol-Version", "Mcp-Session-Id")
               .WithExposedHeaders("Mcp-Session-Id")));
+
+builder.Services.AddSingleton<IVectorStore, InMemoryVectorStore>();
 
 builder.Services
     .AddMcpServer()
