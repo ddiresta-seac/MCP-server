@@ -2,6 +2,7 @@
 @using ModelContextProtocol.Client
 @using System.Net.Http
 @using System.Text.Json
+@using Microsoft.AspNetCore.Components.Forms
 @inject IHttpClientFactory HttpClientFactory
 
 <PageTitle>Semantic Search</PageTitle>
@@ -11,13 +12,13 @@
 <div class="mb-3">
     <input class="form-control" placeholder="Enter your query…" @bind="query" @bind:event="oninput" />
 </div>
-<button class="btn btn-primary" @onclick="RunSearch" disabled="@isLoading">
-    @(isLoading ? "Searching…" : "Search")
+<button class="btn btn-primary" @onclick="RunSearch" disabled="@isSearching">
+    @(isSearching ? "Searching…" : "Search")
 </button>
 
-@if (errorMessage is not null)
+@if (searchError is not null)
 {
-    <div class="alert alert-danger mt-3">@errorMessage</div>
+    <div class="alert alert-danger mt-3">@searchError</div>
 }
 
 @if (results.Count > 0)
@@ -33,50 +34,112 @@
     </ul>
 }
 
-@code {
-    private string query = string.Empty;
-    private bool isLoading;
-    private string? errorMessage;
-    private List<SearchResult> results = [];
+<hr class="my-4" />
 
+<h3>Ingest Document</h3>
+
+<div class="mb-3">
+    <InputFile class="form-control" accept=".md" OnChange="OnFileSelected" />
+    @if (selectedFileName is not null)
+    {
+        <div class="form-text">Selected: @selectedFileName</div>
+    }
+</div>
+<button class="btn btn-success" @onclick="RunIngest" disabled="@(isIngesting || selectedFile is null)">
+    @(isIngesting ? "Ingesting…" : "Ingest")
+</button>
+
+@if (ingestError is not null)
+{
+    <div class="alert alert-danger mt-3">@ingestError</div>
+}
+
+@if (ingestResult is not null)
+{
+    <div class="alert alert-success mt-3">
+        Status: @ingestResult.Status — @ingestResult.Message
+    </div>
+}
+
+@code {
+    // --- Search ---
+    private string query = string.Empty;
+    private bool isSearching;
+    private string? searchError;
+    private List<SearchResult> results = [];
     private record SearchResult(string ChunkText, double Score);
+
+    // --- Ingest ---
+    private IBrowserFile? selectedFile;
+    private string? selectedFileName;
+    private bool isIngesting;
+    private string? ingestError;
+    private IngestResult? ingestResult;
+    private record IngestResult(int Status, string Message);
+
+    private void OnFileSelected(InputFileChangeEventArgs e)
+    {
+        selectedFile = e.File;
+        selectedFileName = e.File.Name;
+        ingestResult = null;
+        ingestError = null;
+    }
+
+    private async Task<McpClient> CreateMcpClient()
+    {
+        var httpClient = HttpClientFactory.CreateClient("McpServer");
+        var transport = new HttpClientTransport(
+            new HttpClientTransportOptions
+            {
+                Endpoint = httpClient.BaseAddress!,
+                TransportMode = HttpTransportMode.StreamableHttp
+            },
+            httpClient);
+        return await McpClient.CreateAsync(transport);
+    }
 
     private async Task RunSearch()
     {
-        errorMessage = null;
+        searchError = null;
         results = [];
-        isLoading = true;
-
+        isSearching = true;
         try
         {
-            var httpClient = HttpClientFactory.CreateClient("McpServer");
-
-            await using var transport = new HttpClientTransport(
-                new HttpClientTransportOptions
-                {
-                    Endpoint = httpClient.BaseAddress!,
-                    TransportMode = HttpTransportMode.StreamableHttp
-                },
-                httpClient);
-
-            await using var mcpClient = await McpClient.CreateAsync(transport);
-
+            await using var mcpClient = await CreateMcpClient();
             var toolResult = await mcpClient.CallToolAsync(
                 "semantic_search",
                 new Dictionary<string, object?> { ["query"] = query, ["topK"] = 5 });
-
-            var json = toolResult.StructuredContent?.GetRawText()
-                ?? "[]";
+            var json = toolResult.StructuredContent?.GetRawText() ?? "[]";
             results = JsonSerializer.Deserialize<List<SearchResult>>(json,
                 new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? [];
         }
-        catch (Exception ex)
+        catch (Exception ex) { searchError = ex.Message; }
+        finally { isSearching = false; }
+    }
+
+    private async Task RunIngest()
+    {
+        if (selectedFile is null) return;
+        ingestError = null;
+        ingestResult = null;
+        isIngesting = true;
+        try
         {
-            errorMessage = ex.Message;
+            using var stream = selectedFile.OpenReadStream(maxAllowedSize: 10 * 1024 * 1024);
+            using var reader = new System.IO.StreamReader(stream);
+            var content = await reader.ReadToEndAsync();
+            var title = System.IO.Path.GetFileNameWithoutExtension(selectedFileName ?? selectedFile.Name);
+
+            await using var mcpClient = await CreateMcpClient();
+            var toolResult = await mcpClient.CallToolAsync(
+                "ingest_document",
+                new Dictionary<string, object?> { ["title"] = title, ["content"] = content });
+
+            var json = toolResult.StructuredContent?.GetRawText() ?? "{\"Status\":0,\"Message\":\"No response\"}";
+            ingestResult = JsonSerializer.Deserialize<IngestResult>(json,
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
         }
-        finally
-        {
-            isLoading = false;
-        }
+        catch (Exception ex) { ingestError = ex.Message; }
+        finally { isIngesting = false; }
     }
 }
